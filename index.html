@@ -10,10 +10,6 @@
   #root { min-height: 100vh; }
 </style>
 
-<!-- Every library below is embedded directly (not loaded from a CDN) so this
-     file works fully offline and when opened directly from disk - loading
-     scripts from a CDN fails when a file is opened via double-click, because
-     browsers block that cross-origin request for local files. -->
 <script>
 /* React 18 */
 /**
@@ -991,15 +987,20 @@ function ExamAnalysisDashboard() {
   const withVA = useMemo(() => students.filter(s => s.va !== null), [students]);
 
   // "% of students at grade X or above", for each band defined in
-  // GCSE_BANDS / AS_BANDS / ALEVEL_BANDS.
+  // GCSE_BANDS / AS_BANDS / ALEVEL_BANDS - computed for both the actual
+  // grade (pct) and the CAT4 target grade (targetPct), so the two can be
+  // compared side by side rather than just showing the actual outcome.
   const bandStats = useMemo(() => {
     const bands = bandsFor(qualType);
-    const total = validGrades.length || 1; // avoid divide-by-zero
+    const totalActual = validGrades.length || 1; // avoid divide-by-zero
+    const validTargets = students.filter(s => s.predicted !== null);
+    const totalTarget = validTargets.length || 1;
     return bands.map(b => ({
       label: b.label,
-      pct: Math.round(validGrades.filter(s => s.actual >= b.min).length / total * 1000) / 10
+      pct: Math.round(validGrades.filter(s => s.actual >= b.min).length / totalActual * 1000) / 10,
+      targetPct: Math.round(validTargets.filter(s => s.predicted >= b.min).length / totalTarget * 1000) / 10
     }));
-  }, [validGrades, qualType]);
+  }, [validGrades, students, qualType]);
 
   // Count of students at each individual grade (9, 8, 7... or A*, A, B...),
   // for both actual and predicted grades - used for the grade distribution
@@ -1237,8 +1238,9 @@ function ExamAnalysisDashboard() {
     const gradeRows = gradeDistribution.map(d => `
       <tr><td>${escapeHtml(d.grade)}</td><td>${d.predictedCount}</td><td>${d.actualCount}</td></tr>
     `).join("");
-    const bandRow = bandStats.map(b => `<td>${b.pct}%</td>`).join("");
     const bandHeaderRow = bandStats.map(b => `<th>${escapeHtml(b.label)}</th>`).join("");
+    const bandActualRow = bandStats.map(b => `<td>${b.pct}%</td>`).join("");
+    const bandTargetRow = bandStats.map(b => `<td>${b.targetPct}%</td>`).join("");
     const byClassSection = mapping.cls ? `
       <h2>By Class</h2>
       <table>
@@ -1326,8 +1328,9 @@ function ExamAnalysisDashboard() {
           ${gradeRows}
         </table>
         <table>
-          <tr>${bandHeaderRow}</tr>
-          <tr>${bandRow}</tr>
+          <tr><th></th>${bandHeaderRow}</tr>
+          <tr><td><b>Actual</b></td>${bandActualRow}</tr>
+          <tr><td><b>CAT4 Target</b></td>${bandTargetRow}</tr>
         </table>
 
         ${byClassSection}
@@ -1734,27 +1737,82 @@ function ExamAnalysisDashboard() {
   }, "CAT4 target vs. actual, threshold bands for ", QUAL_LABELS[qualType]), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
-      gap: 22,
+      gap: 36,
       flexWrap: "wrap",
       marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: "var(--ink)",
+      textTransform: "uppercase",
+      letterSpacing: "0.04em",
+      marginBottom: 8
+    }
+  }, "Actual"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 20,
+      flexWrap: "wrap"
     }
   }, bandStats.map(b => /*#__PURE__*/React.createElement("div", {
     key: b.label,
     style: {
-      minWidth: 70
+      minWidth: 56
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "eax-mono",
     style: {
-      fontSize: 20,
-      fontWeight: 600
+      fontSize: 19,
+      fontWeight: 600,
+      color: "var(--ink)"
     }
   }, b.pct, "%"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
-      color: "var(--slate)"
+      color: "var(--slate)",
+      marginTop: 3
     }
-  }, b.label)))), /*#__PURE__*/React.createElement(ResponsiveContainer, {
+  }, b.label))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      borderLeft: "1px solid var(--line)",
+      paddingLeft: 36
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: "var(--brass-deep)",
+      textTransform: "uppercase",
+      letterSpacing: "0.04em",
+      marginBottom: 8
+    }
+  }, "CAT4 Target"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 20,
+      flexWrap: "wrap"
+    }
+  }, bandStats.map(b => /*#__PURE__*/React.createElement("div", {
+    key: b.label,
+    style: {
+      minWidth: 56
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eax-mono",
+    style: {
+      fontSize: 19,
+      fontWeight: 600,
+      color: "var(--brass-deep)"
+    }
+  }, b.targetPct, "%"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "var(--slate)",
+      marginTop: 3
+    }
+  }, b.label)))))), /*#__PURE__*/React.createElement(ResponsiveContainer, {
     width: "100%",
     height: 220
   }, /*#__PURE__*/React.createElement(BarChart, {
@@ -2109,7 +2167,7 @@ function ExamAnalysisDashboard() {
       verticalAlign: -2,
       marginRight: 4
     }
-  }), "Notes typed above are included in the Word export but aren't saved anywhere else — export before closing this tab if you want to keep them."), /*#__PURE__*/React.createElement("button", {
+  }), "Notes typed above are included in the Word export but aren't saved anywhere else, export before closing this tab if you want to keep them."), /*#__PURE__*/React.createElement("button", {
     className: "eax-btn eax-btn-brass",
     onClick: exportWord
   }, /*#__PURE__*/React.createElement(Download, {
