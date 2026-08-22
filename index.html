@@ -701,6 +701,11 @@ const FIELD_DEFS = [{
   required: true,
   patterns: ["cat4 predicted", "cat4", "predicted grade", "target grade", "predicted", "target"]
 }, {
+  key: "cat4Challenge",
+  label: "CAT4 challenge grade (optional)",
+  required: false,
+  patterns: ["cat4 challenge", "challenge grade", "challenge target", "cat4 challenge grade", "stretch grade", "challenge"]
+}, {
   key: "actual",
   label: "Actual exam grade",
   required: true,
@@ -845,15 +850,21 @@ function ExamAnalysisDashboard() {
   // section near the bottom. Everything else here is raw input state; the
   // *derived* dashboard numbers (VA, bands, charts...) are computed further
   // down with useMemo rather than stored directly.
-  const [stage, setStage] = useState("upload"); // upload | mapping | dashboard
-  const [fileName, setFileName] = useState("");
-  const [headers, setHeaders] = useState([]); // column names from the uploaded file
-  const [rows, setRows] = useState([]); // raw parsed rows, one object per student
-  const [mapping, setMapping] = useState({}); // field key -> chosen column header, e.g. { student: "Name", cls: "Class" }
-  const [qualType, setQualType] = useState("GCSE"); // GCSE | AS | ALEVEL
-  const [subjectLabel, setSubjectLabel] = useState("");
+  //
+  // If this file was opened via "Export to HTML" (see exportHtmlSnapshot),
+  // window.__EAX_SNAPSHOT__ is set by an inline script earlier in <body>,
+  // before this app code runs. When present, the app boots straight into
+  // the dashboard with that data pre-loaded, instead of the upload screen.
+  const snapshot = typeof window !== "undefined" ? window.__EAX_SNAPSHOT__ : null;
+  const [stage, setStage] = useState(snapshot ? "dashboard" : "upload"); // upload | mapping | dashboard
+  const [fileName, setFileName] = useState(snapshot?.fileName || "");
+  const [headers, setHeaders] = useState(snapshot?.headers || []); // column names from the uploaded file
+  const [rows, setRows] = useState(snapshot?.rows || []); // raw parsed rows, one object per student
+  const [mapping, setMapping] = useState(snapshot?.mapping || {}); // field key -> chosen column header, e.g. { student: "Name", cls: "Class" }
+  const [qualType, setQualType] = useState(snapshot?.qualType || "GCSE"); // GCSE | AS | ALEVEL
+  const [subjectLabel, setSubjectLabel] = useState(snapshot?.subjectLabel || "");
   const [parseError, setParseError] = useState("");
-  const [notes, setNotes] = useState({}); // intervention notes, keyed by student.idx
+  const [notes, setNotes] = useState(snapshot?.notes || {}); // intervention notes, keyed by student.idx
   const fileInputRef = useRef(null);
 
   /* ---------------- file handling ---------------- */
@@ -953,8 +964,10 @@ function ExamAnalysisDashboard() {
     if (stage !== "dashboard") return [];
     return rows.map((row, idx) => {
       const predictedRaw = mapping.cat4 ? row[mapping.cat4] : null;
+      const challengeRaw = mapping.cat4Challenge ? row[mapping.cat4Challenge] : null;
       const actualRaw = mapping.actual ? row[mapping.actual] : null;
       const predicted = gradeToNumeric(predictedRaw, qualType);
+      const challenge = gradeToNumeric(challengeRaw, qualType);
       const actual = gradeToNumeric(actualRaw, qualType);
       // VA = actual minus predicted, on the numeric scale. null if either
       // grade couldn't be parsed (e.g. the cell was blank).
@@ -970,6 +983,8 @@ function ExamAnalysisDashboard() {
         predicted,
         actual,
         va,
+        challengeRaw,
+        challenge,
         gender: mapping.gender ? row[mapping.gender] : null,
         send: mapping.send ? row[mapping.send] : null,
         eal: mapping.eal ? row[mapping.eal] : null,
@@ -1141,6 +1156,27 @@ function ExamAnalysisDashboard() {
     return Math.round(validGrades.filter(s => s.actual >= passMin).length / entriesCount * 1000) / 10;
   }, [validGrades, entriesCount, qualType]);
 
+  // % of students whose actual grade met or beat their CAT4 target - i.e.
+  // VA >= 0. Denominator is students with both a predicted and actual grade.
+  const onTargetPct = useMemo(() => {
+    if (!withVA.length) return null;
+    return Math.round(withVA.filter(s => s.va >= 0).length / withVA.length * 1000) / 10;
+  }, [withVA]);
+
+  // Same idea but against the (optional) CAT4 challenge grade - a separate,
+  // more aspirational target some schools set alongside the standard CAT4
+  // prediction. Only computed when a challenge-grade column was mapped.
+  const withChallenge = useMemo(() => students.filter(s => s.actual !== null && s.challenge !== null), [students]);
+  const onChallengePct = useMemo(() => {
+    if (!withChallenge.length) return null;
+    return Math.round(withChallenge.filter(s => s.actual >= s.challenge).length / withChallenge.length * 1000) / 10;
+  }, [withChallenge]);
+
+  // Raw count of students whose actual grade fell short of their CAT4
+  // challenge grade - the challenge-grade counterpart to "Students below
+  // CAT4" (which tracks the standard target).
+  const belowChallengeCount = useMemo(() => withChallenge.filter(s => s.actual < s.challenge).length, [withChallenge]);
+
   // Updates one field (intervention / reasons / steps) for one student's row
   // in the negative-VA table. Notes are keyed by student.idx and live only
   // in this component's state - see the footer note in the UI about them
@@ -1191,6 +1227,12 @@ function ExamAnalysisDashboard() {
     }
     if (passRate !== null) {
       summary.push(`${passRate}% of entries met the pass threshold for ${QUAL_LABELS[qualType]}.`);
+    }
+    if (onTargetPct !== null) {
+      summary.push(`${onTargetPct}% of students met or exceeded their CAT4 target grade.`);
+    }
+    if (mapping.cat4Challenge && onChallengePct !== null) {
+      summary.push(`${onChallengePct}% of students met or exceeded their CAT4 challenge grade.`);
     }
     if (skippedCount > 0) {
       summary.push(`${skippedCount} row${skippedCount === 1 ? " was" : "s were"} excluded from these figures because ${skippedCount === 1 ? "it didn't" : "they didn't"} contain a valid grade.`);
@@ -1311,6 +1353,8 @@ function ExamAnalysisDashboard() {
             <th>Entries</th><th>Pass rate</th><th>Cohort VA</th>
             ${mapping.cls ? "<th>Classes below VA 0</th>" : ""}
             <th>Students below CAT4 target</th>
+            <th>On/above CAT4 target</th>
+            ${mapping.cat4Challenge ? "<th>On/above CAT4 challenge</th>" : ""}
           </tr>
           <tr>
             <td>${entriesCount}</td>
@@ -1318,6 +1362,8 @@ function ExamAnalysisDashboard() {
             <td class="${cohortVA !== null && cohortVA < 0 ? "neg" : "pos"}">${fmtVA(cohortVA)}</td>
             ${mapping.cls ? `<td>${negClassCount} / ${byClass.length}</td>` : ""}
             <td>${negativeStudents.length}</td>
+            <td>${onTargetPct === null ? "—" : onTargetPct + "%"}</td>
+            ${mapping.cat4Challenge ? `<td>${onChallengePct === null ? "—" : onChallengePct + "%"}</td>` : ""}
           </tr>
         </table>
         ${insights.summary.map(s => `<p class="insight">${escapeHtml(s)}</p>`).join("")}
@@ -1370,9 +1416,52 @@ function ExamAnalysisDashboard() {
     URL.revokeObjectURL(url);
   }
 
-  /* ---------------------------------------------------------------------- */
-  /*  Render                                                                 */
-  /* ---------------------------------------------------------------------- */
+  // Saves a standalone copy of this app, pre-loaded with the current data,
+  // as a single self-contained .html file. Recipients open it in any
+  // browser (no server, no login) and see the exact same live dashboard -
+  // charts, tables, editable notes - with nothing re-uploaded anywhere.
+  // Works by cloning this already-loaded page (so we reuse the embedded
+  // React/Recharts/PapaParse/SheetJS bundle rather than duplicating it),
+  // then injecting the current data as a global the app reads on boot.
+  //
+  // Privacy note: unlike the live dashboard, this file has the data baked
+  // in - once saved, it's a normal file subject to your school's usual
+  // data-handling rules, the same as the Word export.
+  function exportHtmlSnapshot() {
+    const snapshotData = {
+      fileName,
+      headers,
+      rows,
+      mapping,
+      qualType,
+      subjectLabel,
+      notes,
+      exportedAt: new Date().toISOString(),
+    };
+
+    const clone = document.documentElement.cloneNode(true);
+    const rootEl = clone.querySelector("#root");
+    if (rootEl) rootEl.innerHTML = ""; // drop the live render - the app re-mounts fresh on open
+
+    const snapshotScript = clone.ownerDocument.createElement("script");
+    snapshotScript.textContent = `window.__EAX_SNAPSHOT__ = ${JSON.stringify(snapshotData)};`;
+    // Must run before the main app script (which mounts the dashboard), so
+    // insert it as the very first script in <body>.
+    const body = clone.querySelector("body");
+    body.insertBefore(snapshotScript, body.firstChild);
+
+    const html = "<!DOCTYPE html>\n" + clone.outerHTML;
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const safeName = (subjectLabel || "subject").replace(/[^a-z0-9]+/gi, "_").toLowerCase();
+    a.download = `${safeName}_exam_dashboard.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
 
   return /*#__PURE__*/React.createElement("div", {
     className: "eax-root"
@@ -1486,9 +1575,11 @@ function ExamAnalysisDashboard() {
 
         /* ---------- Dashboard stage ---------- */
         .eax-stats-grid {
-          display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+          display: grid; grid-template-columns: repeat(4, 1fr);
           gap: 14px; margin-bottom: 22px;
         }
+        @media (max-width: 780px) { .eax-stats-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 420px) { .eax-stats-grid { grid-template-columns: 1fr; } }
         .eax-stat {
           background: var(--paper); border: 1px solid var(--line); border-top: 3px solid var(--brass);
           border-radius: 4px; padding: 14px 16px;
@@ -1567,6 +1658,11 @@ function ExamAnalysisDashboard() {
   }, /*#__PURE__*/React.createElement(RotateCcw, {
     size: 15
   }), " Start over"), /*#__PURE__*/React.createElement("button", {
+    className: "eax-btn eax-btn-outline",
+    onClick: exportHtmlSnapshot
+  }, /*#__PURE__*/React.createElement(Download, {
+    size: 15
+  }), " Export to HTML"), /*#__PURE__*/React.createElement("button", {
     className: "eax-btn eax-btn-brass",
     onClick: exportWord
   }, /*#__PURE__*/React.createElement(Download, {
@@ -1689,7 +1785,7 @@ function ExamAnalysisDashboard() {
       fontSize: 13,
       marginTop: 0
     }
-  }, QUAL_LABELS[qualType], skippedCount > 0 && ` · ${skippedCount} row${skippedCount === 1 ? "" : "s"} skipped (no valid grade)`), /*#__PURE__*/React.createElement("div", {
+  }, QUAL_LABELS[qualType], skippedCount > 0 && ` · ${skippedCount} row${skippedCount === 1 ? "" : "s"} skipped (no valid grade)`, snapshot?.exportedAt && ` · Shared snapshot, generated ${new Date(snapshot.exportedAt).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" })}`), /*#__PURE__*/React.createElement("div", {
     className: "eax-stats-grid"
   }, /*#__PURE__*/React.createElement("div", {
     className: "eax-stat"
@@ -1730,7 +1826,28 @@ function ExamAnalysisDashboard() {
     style: {
       color: negativeStudents.length ? "var(--clay)" : "var(--ink)"
     }
-  }, negativeStudents.length))), /*#__PURE__*/React.createElement("div", {
+  }, negativeStudents.length)), /*#__PURE__*/React.createElement("div", {
+    className: "eax-stat"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eax-stat-label"
+  }, "On/above CAT4 target"), /*#__PURE__*/React.createElement("div", {
+    className: "eax-stat-val eax-mono"
+  }, onTargetPct === null ? "—" : `${onTargetPct}%`)), mapping.cat4Challenge && /*#__PURE__*/React.createElement("div", {
+    className: "eax-stat"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eax-stat-label"
+  }, "On/above CAT4 challenge"), /*#__PURE__*/React.createElement("div", {
+    className: "eax-stat-val eax-mono"
+  }, onChallengePct === null ? "—" : `${onChallengePct}%`)), mapping.cat4Challenge && /*#__PURE__*/React.createElement("div", {
+    className: "eax-stat"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eax-stat-label"
+  }, "Below CAT4 challenge"), /*#__PURE__*/React.createElement("div", {
+    className: "eax-stat-val eax-mono",
+    style: {
+      color: belowChallengeCount ? "var(--clay)" : "var(--ink)"
+    }
+  }, belowChallengeCount))), /*#__PURE__*/React.createElement("div", {
     className: "eax-chart-card"
   }, /*#__PURE__*/React.createElement("h4", null, "Grade distribution"), /*#__PURE__*/React.createElement("p", {
     className: "eax-chart-note"
@@ -2168,6 +2285,11 @@ function ExamAnalysisDashboard() {
       marginRight: 4
     }
   }), "Notes typed above are included in the Word export but aren't saved anywhere else, export before closing this tab if you want to keep them."), /*#__PURE__*/React.createElement("button", {
+    className: "eax-btn eax-btn-outline",
+    onClick: exportHtmlSnapshot
+  }, /*#__PURE__*/React.createElement(Download, {
+    size: 15
+  }), " Export to HTML"), /*#__PURE__*/React.createElement("button", {
     className: "eax-btn eax-btn-brass",
     onClick: exportWord
   }, /*#__PURE__*/React.createElement(Download, {
